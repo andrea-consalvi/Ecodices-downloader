@@ -74,19 +74,52 @@ def safe_get(url: str, *, timeout=(10, 45), stream=False, headers=None):
 
 
 def manuscript_id(raw: str) -> str:
+    """Extract the manuscript identifier from different e-codices page layouts.
+
+    Supported: full/double/single-page viewers, thumbs, description pages, the overview,
+    search-result URLs, short permalinks, and e-codices IIIF manifests.
+    """
     if not is_allowed_url(raw):
         raise ValueError('Incolla un link valido del sito e-codices.')
     path = urlparse(raw).path
-    # e.g. /en/doubleview/csg/0908/280b, /en/list/one/csg/0908
-    match = re.search(r'/(?:doubleview|detail|list/one)/([a-z0-9]+)/([a-z0-9_-]+)/?', path, re.I)
-    if match:
-        institution, shelfmark = match.groups()
-        return f'{institution.lower()}-{shelfmark}'
-    # e.g. /metadata/iiif/csg-0908/manifest.json (case significant in some shelfmarks)
-    match = re.search(r'/metadata/iiif/([A-Za-z0-9_-]+)/manifest\.json$', path, re.I)
+
+    # IIIF manifests, e.g. /metadata/iiif/csg-0908/manifest.json
+    match = re.fullmatch(r'/metadata/iiif/([A-Za-z0-9_-]+)/manifest\.json/?', path, re.I)
     if match:
         return match.group(1)
-    raise ValueError('Non riesco a leggere la segnatura da questo URL. Usa il link di un manoscritto e-codices.')
+
+    # All observed routes have a language prefix, followed by the manuscript
+    # pair: /en/doubleview/csg/0908/280b, /en/searchresult/list/one/csg/0908,
+    # /it/description/csg/0820, /en/list/one/csg/0908, /it/csg/1718a.
+    segments = [segment for segment in path.split('/') if segment]
+    if segments and segments[0].lower() in ('en', 'de', 'fr', 'it'):
+        segments.pop(0)
+
+    routes = (
+        ('searchresult', 'list', 'one'), ('list', 'one'),
+        ('doubleview',), ('singleview',), ('thumbs',), ('thumbview',), ('thumbnails',),
+        ('description',), ('detail',), ('viewer',), ('overview',),
+    )
+    lowered = [segment.lower() for segment in segments]
+    for route in routes:
+        n = len(route)
+        if tuple(lowered[:n]) == route and len(segments) >= n + 2:
+            institution, shelfmark = segments[n:n+2]
+            if re.fullmatch(r'[A-Za-z][A-Za-z0-9]{1,9}', institution) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', shelfmark):
+                return f'{institution.lower()}-{shelfmark}'
+
+    # Short manuscript URL /en/csg/1718a (or /csg/1718a).
+    # Avoid interpreting navigation pages like /en/about/history as manuscripts.
+    if len(segments) in (2, 3):
+        institution, shelfmark = segments[0:2]
+        reserved = {'about', 'search', 'searchresult', 'list', 'index', 'metadata', 'browse', 'contact', 'rights', 'partners', 'description', 'detail'}
+        if (institution.lower() not in reserved
+                and re.fullmatch(r'[A-Za-z][A-Za-z0-9]{1,9}', institution)
+                and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', shelfmark)
+                and (len(segments) == 2 or re.fullmatch(r'[A-Za-z0-9_-]+', segments[2]))):
+            return f'{institution.lower()}-{shelfmark}'
+
+    raise ValueError('Non riesco a leggere la segnatura da questo URL. Copia il link di un manoscritto e-codices, da una pagina di descrizione o dal visualizzatore.')
 
 
 def fetch_manifest(mid: str):
@@ -326,4 +359,4 @@ def download(job_id):
 
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=int(os.environ.get('PORT', '5000')), debug=False)
+    app.run(host='127.0.0.1', port=int(os.environ.get('PORT', '5000')), debug=Fa
