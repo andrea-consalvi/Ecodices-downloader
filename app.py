@@ -29,7 +29,7 @@ WORKERS = 4
 
 JOBS: dict[str, dict] = {}
 LOCK = threading.Lock()
-DEFAULT_URL = 'https://www.e-codices.ch/en/doubleview/csg/0908/280b/'
+DEFAULT_URL = ''
 MANIFEST_HEADERS = {'User-Agent': 'EcodicesPDF/1.1 (scholarly image conversion)', 'Accept': 'application/json'}
 IMAGE_HEADERS = {'User-Agent': 'EcodicesPDF/1.1 (scholarly image conversion)', 'Accept': 'image/jpeg,image/*;q=0.9,*/*;q=0.5'}
 
