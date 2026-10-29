@@ -1,9 +1,10 @@
 services:
   - type: web
-    name: ecodices-pdf-downloader
+    name: ecodices-pdf
     runtime: python
-    region: frankfurt
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120 app:app
-    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
