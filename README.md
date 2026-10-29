@@ -1,49 +1,67 @@
 # e-codices PDF Downloader
 
-A browser-based interface that turns an e-codices manuscript URL into a single PDF, using the manuscript's IIIF manifest. It requires **no software** for people using the website.
+**e-codices PDF Downloader** permette di scaricare in un unico PDF le riproduzioni digitali di un manoscritto disponibile su [e-codices](https://www.e-codices.ch/).
 
-## Publish online: no command line
+L'applicazione si usa direttamente nel browser: non occorre installare programmi o conoscere la linea di comando.
 
-1. Sign in to [GitHub](https://github.com/) and create a **new empty repository**, e.g. `ecodices-pdf` (public or private).
-2. Open the empty repository and choose **Add file → Upload files**. From the extracted ZIP, upload `app.py`, `requirements.txt`, `render.yaml`, and the `templates` directory containing `index.html` (keep the directory structure). GitHub's web uploader supports dragging in the extracted project folder in modern browsers; double-check that `templates/index.html` appears in the repository. Click **Commit changes**.
-3. Sign in to [Render](https://dashboard.render.com/) and select **New → Blueprint**. Connect your GitHub account and select the repository you just created.
-4. Confirm the settings and select **Deploy Blueprint**. Render will install the dependencies and give you an HTTPS address ending in `.onrender.com`.
-5. Share that address with users: they only need to paste a manuscript URL, choose a quality and click **Genera PDF**.
+## Come si usa
 
-You can also use **New → Web Service** instead of Blueprint. Select the repository; Python runtime; build command `pip install -r requirements.txt`; start command `gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120 app:app`.
+1. Apri la pagina web di **e-codices PDF Downloader**.
+2. Vai su [e-codices](https://www.e-codices.ch/) e apri il manoscritto che ti interessa.
+3. Copia l'indirizzo della pagina dal browser e incollalo nel campo **Indirizzo del manoscritto** dell'applicazione.
+4. Seleziona la **Qualità delle immagini**.
+5. Fai clic su **Genera PDF**.
+6. Segui l'avanzamento del download. Al termine, fai clic su **Scarica il PDF** per salvare il documento sul computer.
 
-**Important limits:** Render's free tier goes to sleep after inactivity, may restart during large downloads, has ephemeral local storage, and imposes bandwidth / CPU / memory restrictions. For reliable production downloads of very large manuscripts, use an appropriately sized paid instance. The PDF is retained for about one hour on the same running instance; it disappears after a restart. This initial version handles **one manuscript at a time per server** and has no user authentication. Do not expose it as an unrestricted mass-downloading service.
+### Esempio
 
-## Supported example
+Per scaricare il manoscritto *St. Gallen, Stiftsbibliothek, Cod. Sang. 908*, incolla questo link:
 
 `https://www.e-codices.ch/en/doubleview/csg/0908/280b/`
 
-which resolves to `csg-0908` and attempts the IIIF manifest at:
+Il programma tenterà di recuperare tutte le immagini del manoscritto, non soltanto quella indicata nell'indirizzo.
 
-`https://www.e-codices.unifr.ch/metadata/iiif/csg-0908/manifest.json`
+## Qualità delle immagini
 
-The browser URL identifies the *whole manuscript*, not only folio 280b.
+| Opzione | Caratteristiche |
+| --- | --- |
+| **Veloce · 1200 px** | File più leggero e download generalmente più rapido; adatto a una consultazione preliminare. |
+| **Consigliata · 2000 px** | Buon compromesso tra leggibilità e dimensione del PDF. |
+| **Alta definizione · 3000 px** | Più dettagliata, indicata per esaminare particolari del manoscritto. |
+| **Originale · dimensione massima** | Richiede più tempo e può produrre un file molto grande. |
 
-## Performance
+*Le dimensioni effettive dipendono dalle immagini messe a disposizione da e-codices.*
 
-- Four parallel image downloads.
-- JPEG bytes are embedded in the PDF without unnecessary recompression.
-- PDF output streams to disk rather than being held in RAM.
-- Image order follows the first IIIF sequence; supported Presentation API v2/v3.
-- Safety limits: 1,100 images, 22 MB per image, 700 MB total source images.
+## Funzionalità
 
-## Local test for developers (optional)
+- Accetta i normali collegamenti alle pagine di visualizzazione di e-codices e gli indirizzi dei manifest IIIF compatibili.
+- Identifica automaticamente il manoscritto dal collegamento fornito.
+- Recupera le riproduzioni secondo l'ordine stabilito dal manifest IIIF.
+- Scarica più immagini contemporaneamente, quando il server lo permette.
+- Riunisce le riproduzioni in **un solo PDF**.
+- Mostra lo stato dell'elaborazione e consente di scaricare il PDF quando è pronto.
 
-`pip install -r requirements.txt && python app.py`
+## Domande frequenti
 
-The website then runs at `http://127.0.0.1:5000`.
+**Devo installare qualcosa?**  
+No. Se l'applicazione è già pubblicata online, bastano un browser e una connessione Internet.
 
-## Limitations
+**Devo inserire il link di ogni carta?**  
+No. È sufficiente il collegamento a una pagina del manoscritto: il programma prova a recuperare l'intera sequenza delle riproduzioni.
 
-The app depends on e-codices responding successfully to IIIF manifest and image requests. It cannot bypass an outage, access restrictions, image licensing conditions, or the rate limits imposed by e-codices. Some manuscripts may use atypical IIIF responses. Avoid running many concurrent public downloads out of respect for the host library. This release includes automated tests with simulated IIIF data, but these tests and a live end-to-end e-codices download could **not** be executed in this environment because the dependencies and external server were unavailable.
+**Posso chiudere la pagina durante l'elaborazione?**  
+È preferibile lasciarla aperta fino alla comparsa del pulsante **Scarica il PDF**. Il documento generato viene conservato temporaneamente (circa un'ora).
 
-## Automated local tests (developers only)
+**Perché il download può essere lento o non riuscire?**  
+Il tempo dipende dal numero di immagini, dalla loro risoluzione, dalla velocità del server di e-codices e dalle risorse disponibili sul servizio che ospita l'applicazione. Se compare un errore, verifica il link e riprova più tardi, eventualmente scegliendo una risoluzione inferiore.
 
-`python -m unittest discover -s tests`
+**Le immagini sono sempre disponibili?**  
+No. Alcuni manoscritti o immagini possono essere temporaneamente inaccessibili; il programma non può aggirare i limiti tecnici o le restrizioni imposte dai server di origine.
 
-Includes a simulated manuscript / PDF integration test; no real images are requested from the e-codices server in these tests.
+## Uso delle riproduzioni
+
+Le immagini provengono da **e-codices** e dalle biblioteche che conservano i manoscritti. Prima di pubblicare o riutilizzare le riproduzioni, consulta le condizioni d'uso e le indicazioni di attribuzione relative al singolo manoscritto.
+
+---
+
+*Nota: il programma è un progetto indipendente e non è un servizio ufficiale di e-codices.*
