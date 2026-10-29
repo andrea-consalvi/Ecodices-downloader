@@ -110,15 +110,18 @@ def manuscript_id(raw: str) -> str:
             if re.fullmatch(r'[A-Za-z][A-Za-z0-9]{1,9}', institution) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', shelfmark):
                 return f'{institution.lower()}-{shelfmark}'
 
-    # Short manuscript URL /en/csg/1718a (or /csg/1718a).
-    # Avoid interpreting navigation pages like /en/about/history as manuscripts.
-    if len(segments) in (2, 3):
-        institution, shelfmark = segments[0:2]
-        reserved = {'about', 'search', 'searchresult', 'list', 'index', 'metadata', 'browse', 'contact', 'rights', 'partners', 'description', 'detail'}
+    # Short manuscript URLs also include a folio and a viewer parameter:
+    # /en/bbb/0330/2r/0/ -> bbb-0330. The trailing 0 is NOT part
+    # of the manuscript identifier, and the folio must not affect the PDF.
+    if len(segments) >= 2:
+        institution, shelfmark = segments[:2]
+        reserved = {'about', 'search', 'searchresult', 'list', 'index', 'metadata',
+                    'browse', 'contact', 'rights', 'partners', 'description', 'detail'}
         if (institution.lower() not in reserved
                 and re.fullmatch(r'[A-Za-z][A-Za-z0-9]{1,9}', institution)
                 and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', shelfmark)
-                and (len(segments) == 2 or re.fullmatch(r'[A-Za-z0-9_-]+', segments[2]))):
+                and all(re.fullmatch(r'[A-Za-z0-9_-]+', suffix)
+                        for suffix in segments[2:])):
             return f'{institution.lower()}-{shelfmark}'
 
     raise ValueError('Non riesco a leggere la segnatura da questo URL. Copia il link di un manoscritto e-codices, da una pagina di descrizione o dal visualizzatore.')
