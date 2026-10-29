@@ -26,6 +26,8 @@ MAX_TOTAL_BYTES = 700 * 1024 * 1024
 MAX_AGE_SECONDS = 60 * 60
 MAX_DOWNLOADS = 1
 WORKERS = 4
+# Se la pagina non comunica più per 90 secondi, annulliamo il lavoro.
+CLIENT_LEASE_SECONDS = 90
 
 JOBS: dict[str, dict] = {}
 LOCK = threading.Lock()
@@ -208,27 +210,46 @@ def image_candidates(image, quality):
     return [f'{source}/full/{size}/0/default.jpg' for size in sizes]
 
 
-def download_one(index: int, image, quality: str, folder: Path):
-    """Stream one image to disk; retain valid JPEG bytes without re-encoding."""
+class JobCancelled(Exception):
+    """A job was explicitly cancelled or its browser tab stopped checking in."""
+
+
+def ensure_active(job_id: str):
+    with LOCK:
+        job = JOBS.get(job_id)
+        if not job or job['cancel_event'].is_set() or job['status'] == 'cancelled':
+            raise JobCancelled('Download annullato.')
+        if (job['status'] == 'running'
+                and time.monotonic() - job['last_seen'] > CLIENT_LEASE_SECONDS):
+            job['cancel_event'].set()
+            job['status'] = 'cancelled'
+            job['message'] = 'Download interrotto: la pagina non è più collegata.'
+            raise JobCancelled(job['message'])
+
+
+def download_one(index: int, image, quality: str, folder: Path, job_id: str):
+    """Stream a single image with periodic cooperative cancellation checks."""
     last_error = None
     for url in image_candidates(image, quality):
         for attempt in range(2):
+            ensure_active(job_id)
             tmp = folder / f'{index:05}.part'
             try:
-                with safe_get(url, timeout=(12, 75), stream=True, headers=IMAGE_HEADERS) as r:
+                with safe_get(url, timeout=(12, 40), stream=True, headers=IMAGE_HEADERS) as r:
                     r.raise_for_status()
                     if int(r.headers.get('content-length', 0)) > MAX_IMAGE_BYTES:
                         raise RuntimeError('Immagine oltre il limite di 22 MB.')
                     received = 0
                     with tmp.open('wb') as stream:
                         for chunk in r.iter_content(chunk_size=131072):
+                            ensure_active(job_id)
                             if not chunk:
                                 continue
                             received += len(chunk)
                             if received > MAX_IMAGE_BYTES:
                                 raise RuntimeError('Immagine oltre il limite di 22 MB.')
                             stream.write(chunk)
-                # Validate and preserve original JPEG data; conversion only for non-JPEG formats
+                ensure_active(job_id)
                 with Image.open(tmp) as im:
                     im.verify()
                 with Image.open(tmp) as im:
@@ -240,11 +261,16 @@ def download_one(index: int, image, quality: str, folder: Path):
                     ImageOps.exif_transpose(im).convert('RGB').save(target, 'JPEG', quality=88)
                 tmp.unlink(missing_ok=True)
                 return target, target.stat().st_size
+            except JobCancelled:
+                tmp.unlink(missing_ok=True)
+                raise
             except (requests.RequestException, RuntimeError, OSError, UnidentifiedImageError, ValueError) as exc:
                 tmp.unlink(missing_ok=True)
                 last_error = exc
                 if attempt == 0:
+                    ensure_active(job_id)
                     time.sleep(0.7)
+    ensure_active(job_id)
     raise RuntimeError(f'Errore durante il download della pagina {index + 1}: {last_error}')
 
 
@@ -256,38 +282,66 @@ def update(job_id: str, **changes):
 
 def run_job(job_id: str, mid: str, quality: str):
     folder = None
+    futures = {}
     try:
+        ensure_active(job_id)
         update(job_id, message='Lettura del manifest IIIF…')
         manifest = fetch_manifest(mid)
+        ensure_active(job_id)
         images = images_from_manifest(manifest)
         folder = Path(tempfile.mkdtemp(prefix='ecodices_pdf_'))
         update(job_id, total=len(images), message=f'{len(images)} immagini individuate. Scaricamento avviato…')
         paths = [None] * len(images)
         total_bytes = 0
+        completed = 0
+        # Wait in short intervals to detect closed tabs also when the image server is slow.
         with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            futures = {pool.submit(download_one, i, item, quality, folder): i for i, item in enumerate(images)}
-            for completed, future in enumerate(concurrent.futures.as_completed(futures), start=1):
-                path, nbytes = future.result()
-                paths[futures[future]] = path
-                total_bytes += nbytes
-                if total_bytes > MAX_TOTAL_BYTES:
-                    for pending in futures:
-                        pending.cancel()
-                    raise RuntimeError('Limite di spazio raggiunto (700 MB). Prova la qualità Veloce.')
-                update(job_id, percent=int(completed / len(images) * 92),
-                       message=f'Immagini scaricate: {completed}/{len(images)}')
+            futures = {pool.submit(download_one, i, item, quality, folder, job_id): i
+                       for i, item in enumerate(images)}
+            pending = set(futures)
+            try:
+                while pending:
+                    ensure_active(job_id)
+                    finished, pending = concurrent.futures.wait(
+                        pending, timeout=1.0, return_when=concurrent.futures.FIRST_COMPLETED)
+                    for future in finished:
+                        ensure_active(job_id)
+                        path, nbytes = future.result()
+                        paths[futures[future]] = path
+                        total_bytes += nbytes
+                        completed += 1
+                        if total_bytes > MAX_TOTAL_BYTES:
+                            raise RuntimeError('Limite di spazio raggiunto (700 MB). Prova la qualità Veloce.')
+                        update(job_id, percent=int(completed / len(images) * 92),
+                               message=f'Immagini scaricate: {completed}/{len(images)}')
+            except Exception:
+                for future in futures:
+                    future.cancel()
+                # Cancellation is propagated to active workers; the executor waits for
+                # them to stop before the temporary folder can safely be removed.
+                raise
+        ensure_active(job_id)
         update(job_id, percent=94, message='Assemblaggio del PDF senza ricompressione…')
         output_path = folder / f'{mid}.pdf'
-        # Important: outputstream avoids allocating the whole PDF in memory
         with output_path.open('wb') as output:
             img2pdf.convert([str(p) for p in paths], outputstream=output)
+        ensure_active(job_id)
         for image_path in paths:
             image_path.unlink(missing_ok=True)
         update(job_id, status='done', percent=100,
                message=f'PDF pronto: {len(paths)} immagini, {output_path.stat().st_size / (1024 ** 2):.1f} MB.',
                path=str(output_path), filename=output_path.name)
+    except JobCancelled:
+        update(job_id, status='cancelled', message='Download annullato.', percent=0)
+        if folder:
+            shutil.rmtree(folder, ignore_errors=True)
     except Exception as exc:
-        update(job_id, status='error', message=str(exc), percent=0)
+        with LOCK:
+            cancelled = job_id in JOBS and JOBS[job_id]['cancel_event'].is_set()
+        if cancelled:
+            update(job_id, status='cancelled', message='Download annullato.', percent=0)
+        else:
+            update(job_id, status='error', message=str(exc), percent=0)
         if folder:
             shutil.rmtree(folder, ignore_errors=True)
 
@@ -331,7 +385,8 @@ def create_job():
             return jsonify(error='È già in corso un download. Riprova quando sarà terminato.'), 429
         job_id = uuid.uuid4().hex
         JOBS[job_id] = {'status': 'running', 'message': 'Preparazione…', 'percent': 0,
-                        'created_at': time.time(), 'total': 0}
+                        'created_at': time.time(), 'last_seen': time.monotonic(),
+                        'cancel_event': threading.Event(), 'total': 0}
     threading.Thread(target=run_job, args=(job_id, mid, quality), daemon=True).start()
     return jsonify(id=job_id), 202
 
@@ -342,8 +397,25 @@ def status(job_id):
         job = JOBS.get(job_id)
         if not job:
             return jsonify(error='Operazione non trovata o scaduta.'), 404
+        if job['status'] == 'running':
+            job['last_seen'] = time.monotonic()
         return jsonify({key: value for key, value in job.items()
-                        if key not in ('path', 'filename', 'created_at')})
+                        if key not in ('path', 'filename', 'created_at', 'last_seen', 'cancel_event')})
+
+
+@app.post('/api/jobs/<job_id>/cancel')
+def cancel_job(job_id):
+    """Mark cancellation immediately; workers stop cooperatively and clean files."""
+    with LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify(error='Operazione non trovata.'), 404
+        if job['status'] == 'running':
+            job['cancel_event'].set()
+            job['status'] = 'cancelled'
+            job['message'] = 'Download annullato.'
+            job['percent'] = 0
+        return jsonify(status=job['status'])
 
 
 @app.get('/api/jobs/<job_id>/download')
